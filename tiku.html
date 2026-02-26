@@ -82,6 +82,10 @@
     </div>
     <button class="btn btn-red btn-block" onclick="login()">激活并进入</button>
     <div class="device-info" onclick="copyDeviceId()">本机序列号: <span id="my-device-id-display">获取中...</span> (点击复制)</div>
+    <div style="margin-top: 18px; font-size: 11px; color:#999; text-align:center; line-height:1.6;">
+        技术支持：13211911994<br>
+        马老师工作室 版权所有 · XTT Studio © 2026 All Rights Reserved
+    </div>
     <p onclick="showAdmin()" style="margin-top: 25px; color: #f8f9fa; font-size: 10px; cursor: pointer;">A</p>
 </div>
 
@@ -618,7 +622,7 @@
         backToMenu();
     }
 
-    // 自动上传成绩到Gitee和GitHub
+    // 自动上传成绩到Gitee
     async function autoUploadScore(score, wrongCount) {
         try {
             console.log('开始上传成绩，得分:', score, '错题数:', wrongCount);
@@ -650,27 +654,9 @@
             const giteeConfig = JSON.parse(localStorage.getItem('gitee_config') || '{}');
             console.log('Gitee配置:', giteeConfig);
             if (giteeConfig.owner && giteeConfig.repo && giteeConfig.path && giteeConfig.token) {
-                uploadWithRetry('gitee', giteeConfig, scoreData, 3);
+                await uploadWithRetry('gitee', giteeConfig, scoreData, 3);
             } else {
                 console.log('Gitee配置不完整，跳过上传');
-            }
-            
-            // 尝试上传到GitHub
-            const githubConfig = JSON.parse(localStorage.getItem('github_config') || '{}');
-            console.log('GitHub配置:', githubConfig);
-            if (githubConfig.owner && githubConfig.repo && githubConfig.path && githubConfig.token) {
-                // 只尝试一次GitHub上传，因为认证错误是永久性的
-                try {
-                    await uploadScoreToGithub(githubConfig, scoreData);
-                    console.log('GitHub上传成功');
-                    // 清除待上传的成绩
-                    localStorage.removeItem('pending_score');
-                } catch (error) {
-                    console.log('GitHub上传失败，跳过:', error.message);
-                    // 不存储到本地，因为Gitee已经会尝试上传
-                }
-            } else {
-                console.log('GitHub配置不完整，跳过上传');
             }
         } catch (error) {
             // 上传失败不影响用户体验，静默处理
@@ -684,8 +670,6 @@
             try {
                 if (platform === 'gitee') {
                     await uploadScoreToGitee(config, scoreData);
-                } else if (platform === 'github') {
-                    await uploadScoreToGithub(config, scoreData);
                 }
                 console.log(`${platform}上传成功`);
                 // 清除待上传的成绩
@@ -714,26 +698,22 @@
     // 上传成绩到Gitee
     async function uploadScoreToGitee(config, scoreData) {
         try {
-            // 构建API URL
-            const apiUrl = `https://gitee.com/api/v5/repos/${config.owner}/${config.repo}/contents/${config.path}/${scoreData.name}_${scoreData.deviceId.substring(0, 8)}.json`;
-            console.log('Gitee上传URL:', apiUrl);
+            if (!config.token) {
+                throw new Error('未配置Gitee令牌，无法上传成绩');
+            }
+
+            const baseUrl = `https://gitee.com/api/v5/repos/${config.owner}/${config.repo}/contents/${config.path}/${scoreData.name}_${scoreData.deviceId.substring(0, 8)}.json`;
+            const apiUrlWithToken = `${baseUrl}?access_token=${encodeURIComponent(config.token)}`;
+            console.log('Gitee上传URL:', baseUrl);
 
             // 读取现有文件（如果存在）
             let existingContent = '';
             let sha = '';
             
             try {
-                // 准备请求头（添加认证）
-                const getHeaders = {
-                    'Accept': 'application/json'
-                };
-                if (config.token) {
-                    getHeaders['Authorization'] = `token ${config.token}`;
-                }
-                
                 console.log('Gitee读取文件...');
-                const getResponse = await fetch(apiUrl, {
-                    headers: getHeaders
+                const getResponse = await fetch(apiUrlWithToken, {
+                    headers: { 'Accept': 'application/json' }
                 });
                 
                 console.log('Gitee读取响应状态:', getResponse.status);
@@ -807,19 +787,14 @@
                 uploadData.sha = sha;
             }
 
-            // 准备上传请求头（添加认证）
-            const uploadHeaders = {
-                'Content-Type': 'application/json'
-            };
-            if (config.token) {
-                uploadHeaders['Authorization'] = `token ${config.token}`;
-            }
-
             // 发送请求
             console.log('Gitee开始上传...');
-            const response = await fetch(apiUrl, {
+            const response = await fetch(apiUrlWithToken, {
                 method: sha ? 'PUT' : 'POST',
-                headers: uploadHeaders,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Accept': 'application/json'
+                },
                 body: JSON.stringify(uploadData)
             });
 
@@ -839,129 +814,6 @@
         }
     }
     
-    // 上传成绩到GitHub
-    async function uploadScoreToGithub(config, scoreData) {
-        try {
-            // 构建API URL
-            const apiUrl = `https://api.github.com/repos/${config.owner}/${config.repo}/contents/${config.path}/${scoreData.name}_${scoreData.deviceId.substring(0, 8)}.json`;
-            console.log('GitHub上传URL:', apiUrl);
-
-            // 读取现有文件（如果存在）
-            let existingContent = '';
-            let sha = '';
-            
-            try {
-                // 准备请求头（添加认证）
-                const getHeaders = {
-                    'Accept': 'application/vnd.github.v3+json'
-                };
-                if (config.token) {
-                    getHeaders['Authorization'] = `token ${config.token}`;
-                }
-                
-                console.log('GitHub读取文件...');
-                const getResponse = await fetch(apiUrl, {
-                    headers: getHeaders
-                });
-                
-                console.log('GitHub读取响应状态:', getResponse.status);
-                if (getResponse.ok) {
-                    const existingData = await getResponse.json();
-                    existingContent = decodeURIComponent(escape(atob(existingData.content)));
-                    sha = existingData.sha;
-                    console.log('GitHub文件已存在，SHA:', sha);
-                } else if (getResponse.status === 404) {
-                    // 文件不存在，创建新文件
-                    console.log('GitHub文件不存在，创建新文件');
-                } else if (getResponse.status === 401) {
-                    // 认证错误，直接抛出错误
-                    const errorText = await getResponse.text();
-                    throw new Error(`GitHub认证失败: ${getResponse.status} - ${errorText}`);
-                } else {
-                    const errorText = await getResponse.text();
-                    throw new Error(`GitHub读取文件失败: ${getResponse.status} - ${errorText}`);
-                }
-            } catch (e) {
-                // 检查是否是认证错误
-                if (e.message && e.message.includes('GitHub认证失败')) {
-                    throw e;
-                }
-                // 文件不存在，创建新文件
-                console.log('GitHub读取文件时出错:', e);
-            }
-
-            // 解析现有数据
-            let studentData = {
-                name: scoreData.name,
-                deviceId: scoreData.deviceId,
-                course: scoreData.course,
-                scores: []
-            };
-
-            if (existingContent) {
-                try {
-                    studentData = JSON.parse(existingContent);
-                    console.log('GitHub解析现有数据成功，历史成绩数:', studentData.scores.length);
-                } catch (e) {
-                    // 解析失败，使用默认数据
-                    console.log('GitHub解析文件失败，使用默认数据:', e);
-                }
-            }
-
-            // 添加新成绩
-            studentData.scores.push({
-                date: scoreData.date,
-                score: scoreData.score,
-                totalQuestions: scoreData.totalQuestions,
-                wrongCount: scoreData.wrongCount,
-                category: scoreData.category
-            });
-            console.log('GitHub添加新成绩后，总成绩数:', studentData.scores.length);
-
-            // 准备上传数据
-            const uploadData = {
-                content: btoa(unescape(encodeURIComponent(JSON.stringify(studentData, null, 2)))),
-                message: `更新${scoreData.name}的成绩`,
-                branch: config.branch || 'main'
-            };
-
-            if (sha) {
-                uploadData.sha = sha;
-            }
-
-            // 准备上传请求头（添加认证）
-            const uploadHeaders = {
-                'Content-Type': 'application/json',
-                'Accept': 'application/vnd.github.v3+json'
-            };
-            if (config.token) {
-                uploadHeaders['Authorization'] = `token ${config.token}`;
-            }
-
-            // 发送请求
-            console.log('GitHub开始上传...');
-            const response = await fetch(apiUrl, {
-                method: sha ? 'PUT' : 'PUT', // GitHub使用PUT创建和更新
-                headers: uploadHeaders,
-                body: JSON.stringify(uploadData)
-            });
-
-            console.log('GitHub上传响应状态:', response.status);
-            if (!response.ok) {
-                const errorText = await response.text();
-                throw new Error(`GitHub上传失败: ${response.status} - ${errorText}`);
-            }
-
-            const responseData = await response.json();
-            console.log('GitHub上传成功:', responseData.commit.sha);
-            return true;
-        } catch (error) {
-            // 上传失败不影响用户体验，但是记录详细错误
-            console.error('GitHub上传失败:', error);
-            throw error;
-        }
-    }
-
     function renderNavGrid() {
         const grid = document.getElementById('nav-grid');
         grid.innerHTML = pool.map((_, i) => `<div class="nav-item ${examAnswers[i] ? 'done' : ''} ${cur === i ? 'current' : ''}" onclick="jumpTo(${i})">${i + 1}</div>`).join('');
@@ -1022,6 +874,7 @@
                 <input type="text" id="gitee-repo" placeholder="仓库名称">
                 <input type="text" id="gitee-path" placeholder="文件存储路径 (如: scores)">
                 <input type="text" id="gitee-branch" placeholder="分支名称 (默认: master)">
+                <input type="password" id="gitee-token" placeholder="Gitee私人令牌（必填）">
                 <button class="btn btn-blue btn-block" onclick="saveGiteeConfig()">保存配置</button>
                 <div id="gitee-config-result" class="hidden" style="margin-top: 15px; padding: 10px; background: #d1fae5; border-radius: 8px; font-size: 12px;">
                     配置保存成功！学员考试后将自动上传成绩
@@ -1057,6 +910,7 @@
         if (config.repo) document.getElementById('gitee-repo').value = config.repo;
         if (config.path) document.getElementById('gitee-path').value = config.path;
         if (config.branch) document.getElementById('gitee-branch').value = config.branch;
+        if (config.token) document.getElementById('gitee-token').value = config.token;
     }
 
     function saveGiteeConfig() {
@@ -1064,16 +918,18 @@
         const repo = document.getElementById('gitee-repo').value.trim();
         const path = document.getElementById('gitee-path').value.trim();
         const branch = document.getElementById('gitee-branch').value.trim() || 'master';
+        const token = document.getElementById('gitee-token').value.trim();
         
-        if (!owner || !repo || !path) {
-            return alert('请填写完整的Gitee配置信息');
+        if (!owner || !repo || !path || !token) {
+            return alert('请填写完整的Gitee配置信息（包括私人令牌）');
         }
         
         const config = {
             owner: owner,
             repo: repo,
             path: path,
-            branch: branch
+            branch: branch,
+            token: token
         };
         
         localStorage.setItem('gitee_config', JSON.stringify(config));
@@ -1248,32 +1104,6 @@
     }
 
     window.onload = function() {
-        // 自动配置Gitee信息（首次启动时）
-        if (!localStorage.getItem('gitee_config')) {
-            const defaultGiteeConfig = {
-                owner: 'zhaoyun119119', // Gitee用户名
-                repo: 'xiaotitong', // 仓库名称
-                path: 'xiaotitong', // 存储路径
-                branch: 'master', // 分支名称
-                token: 'f6584da25c3b398768216bcf4d09871c' // Gitee私人令牌
-            };
-            localStorage.setItem('gitee_config', JSON.stringify(defaultGiteeConfig));
-            console.log('Gitee配置已自动设置');
-        }
-        
-        // 自动配置GitHub信息（首次启动时）
-        if (!localStorage.getItem('github_config')) {
-            const defaultGithubConfig = {
-                owner: 'a990154649', // GitHub用户名
-                repo: 'xiaotitong', // 仓库名称
-                path: 'xiaotitong', // 存储路径
-                branch: 'main', // 分支名称（GitHub默认是main）
-                token: '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' // GitHub访问令牌
-            };
-            localStorage.setItem('github_config', JSON.stringify(defaultGithubConfig));
-            console.log('GitHub配置已自动设置');
-        }
-        
         // 检查待上传的成绩
         checkPendingScore();
         
@@ -1293,3 +1123,4 @@
 </script>
 </body>
 </html>
+
